@@ -1,6 +1,6 @@
 # Industrial Claude Bridge & OpenClaw Integration Guide
 
-本项目是 `industrial-claude-bridge` (Python 版核心驱动) 的标准化分发版，配合 `openclaw-zero-token-dist` 可构建一套具备 **本地 Tool 执行**、**多账号池**、**中文 UI 界面** 的工业级 LLM 生产线。
+本项目是 `industrial-claude-bridge` (Python 版核心驱动) 的标准化分发版，配合 [openclaw-zero-token-dist](https://github.com/joe12803/openclaw-zero-token-dist) 可构建一套具备 **本地 Tool 执行**、**多账号池**、**中文 UI 界面** 的工业级 LLM 生产线。
 
 ## 🏗️ 整体架构图
 1. **User/Feishu** -> 发送请求。
@@ -25,9 +25,13 @@
    ```
 
 ### 第二步：配置 OpenClaw (网关与界面)
-1. **安装依赖**:
-   在 `openclaw-zero-token-dist` 目录下执行 `pnpm install`。
-2. **配置 Provider**:
+1. **下载代码**:
+   ```bash
+   git clone https://github.com/joe12803/openclaw-zero-token-dist.git
+   ```
+2. **安装依赖**:
+   在目录内执行 `pnpm install`。
+
    在 OpenClaw UI 界面中添加一个 Provider：
    - **Base URL**: `http://127.0.0.1:8001/v1`
    - **API Key**: `sk-123456`
