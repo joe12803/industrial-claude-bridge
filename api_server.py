@@ -6,8 +6,9 @@ import subprocess
 import json
 import logging
 from typing import List, Optional, Union, Any
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from claude_webapi import ClaudeClient
 from claude_webapi.constants import Model
@@ -20,9 +21,11 @@ logger = logging.getLogger("claude-bridge")
 
 load_dotenv()
 
-app = FastAPI(title="Claude Tool Bridge")
+app = FastAPI(title="Claude Tool Bridge - Secure Version")
+security = HTTPBearer()
 
 ACCOUNTS_FILE = "/home/joe1280/Claude-API/accounts.json"
+AUTH_TOKEN = "sk-123456"  # 强制要求的 Token
 
 class AccountManager:
     def __init__(self, config_path: str):
@@ -38,9 +41,7 @@ class AccountManager:
                 self.accounts = json.load(f)
         if not self.accounts:
             sk = os.getenv("CLAUDE_SESSION_KEY")
-            org = os.getenv("CLAUDE_ORG_ID")
-            if sk: self.accounts = [{"session_key": sk, "org_id": org}]
-        self.index = 0
+            if sk: self.accounts = [{"session_key": sk}]
         logger.info(f"Loaded {len(self.accounts)} accounts.")
 
     async def get_next(self):
@@ -53,12 +54,28 @@ class AccountManager:
 
 account_manager = AccountManager(ACCOUNTS_FILE)
 
-# --- Tool Execution ---
+# --- Security Middleware ---
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if credentials.credentials != AUTH_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    return credentials.credentials
+
+# --- Secure Tool Execution ---
+
+DANGEROUS_COMMANDS = ["rm ", "mv ", "shutdown", "reboot", ":(", "mkfs", "dd ", "> /dev", "kill "]
 
 async def execute_local_tool(name: str, args: dict) -> str:
     logger.info(f"RUNNING TOOL: {name}({args})")
-    if name == "shell" or name == "bash":
-        cmd = args.get("command")
+    if name in ["shell", "bash"]:
+        cmd = args.get("command", "").lower()
+        
+        # 指令黑名单检查
+        for dangerous in DANGEROUS_COMMANDS:
+            if dangerous in cmd:
+                logger.warning(f"BLOCKED DANGEROUS COMMAND: {cmd}")
+                return f"Error: Command '{cmd}' is blocked for security reasons."
+        
         try:
             proc = await asyncio.create_subprocess_shell(
                 cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -93,23 +110,20 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
 
 @app.get("/v1/models")
-async def list_models():
+async def list_models(token: str = Depends(verify_token)):
     return {"object": "list", "data": [{"id": "claude-sonnet-4-6", "object": "model"}]}
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify_token)):
     acc = await account_manager.get_next()
     session_key = acc["session_key"]
     org_id = acc.get("org_id")
     
-    # 核心指令：强制 XML 格式
     TOOL_INSTRUCTION = """
 You have access to a local Linux shell. To execute commands, use EXACTLY this format:
 <tool_call>{"name": "shell", "arguments": {"command": "your_command"}}</tool_call>
-The result will be provided in the next turn.
 Available tools: shell
 """
-    
     history = []
     if request.tools:
         history.append(f"System: {TOOL_INSTRUCTION}")
@@ -126,14 +140,11 @@ Available tools: shell
             resp = await client.generate_content(prompt, model=request.model)
             return resp.text
 
-    # --- RECURSIVE LOOP ---
     last_text = ""
     for i in range(3):
         last_text = await get_claude_response(history)
         tool_calls = parse_tool_calls(last_text)
-        
-        if not tool_calls:
-            break
+        if not tool_calls: break
             
         history.append(f"Assistant: {last_text}")
         for tc in tool_calls:
